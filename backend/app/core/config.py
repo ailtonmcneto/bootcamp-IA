@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     chunk_size: int = 1000
     chunk_overlap: int = 150
     max_search_results: int = 5
-    min_similarity: float = 0.55
+    min_similarity: float = 0.35
 
     gemini_api_key: str = ""
     gemini_chat_model: str = "gemini-3.6-flash"
