@@ -701,6 +701,7 @@ textarea:focus {
   background: #effaf3;
   font-size: 0.8rem;
   line-height: 1.5;
+  white-space: pre-line;
 }
 
 .status-message.error {
@@ -883,6 +884,10 @@ textarea:focus {
   flex: 1;
 }
 
+.active-document .upload-copy span {
+  overflow-wrap: anywhere;
+}
+
 .question-heading {
   margin-bottom: 16px;
 }
@@ -1024,12 +1029,17 @@ textarea:disabled {
 
 .source-page {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin: 0 0 7px;
   color: var(--color-accent);
   font-size: 0.7rem;
   font-weight: 800;
+}
+
+.source-filename {
+  overflow-wrap: anywhere;
 }
 
 .source-quote,

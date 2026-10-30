@@ -1,4 +1,5 @@
 import logging
+from dataclasses import replace
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -6,15 +7,30 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from app.core.auth import get_current_user
 from app.core.config import settings
 from app.schemas.document import (
+    DocumentIdsRequest,
     DocumentMetadata,
     DocumentUploadResponse,
+    MultiDocumentQuestionRequest,
+    MultiDocumentQuestionResponse,
     QuestionRequest,
     QuestionResponse,
     SourceExcerpt,
 )
-from app.services.ai_service import AIServiceError, Answerer, answer_question, get_answerer
+from app.services.ai_service import (
+    AIServiceError,
+    Answerer,
+    AnswerResult,
+    answer_question,
+    get_answerer,
+)
 from app.services.document_search import split_into_chunks
-from app.services.document_store import DocumentStore, StoredChunk, get_document_store
+from app.services.document_store import (
+    DocumentStore,
+    ScoredChunk,
+    StoredChunk,
+    StoredDocument,
+    get_document_store,
+)
 from app.services.embeddings import Embedder, EmbeddingError, get_embedder
 from app.services.gemini_retry import RateLimitedError
 from app.services.pdf_reader import (
@@ -49,6 +65,64 @@ def _parse_id(document_id: str) -> UUID:
         return UUID(document_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Documento não encontrado.") from exc
+
+
+def _answer_documents(
+    question: str,
+    documents: list[StoredDocument],
+    user_id: str,
+    embedder: Embedder,
+    answerer: Answerer,
+    document_store: DocumentStore,
+) -> AnswerResult:
+    question = question.strip()
+    if not question:
+        raise HTTPException(status_code=422, detail="A pergunta não pode estar vazia.")
+    try:
+        query_embedding = embedder.embed_query(question)
+    except EmbeddingError as exc:
+        logger.warning("Falha ao gerar embedding da pergunta: %s", exc)
+        raise _ai_error(exc) from exc
+
+    chunks: list[ScoredChunk] = []
+    for document in documents:
+        chunks.extend(
+            replace(
+                chunk,
+                document_id=str(document.document_id),
+                filename=document.filename,
+            )
+            for chunk in document_store.search(
+                document.document_id,
+                user_id,
+                query_embedding,
+                limit=settings.max_search_results,
+                min_similarity=settings.min_similarity,
+            )
+        )
+    chunks.sort(key=lambda chunk: (-chunk.score, chunk.chunk_index))
+    chunks = chunks[: settings.max_search_results]
+
+    try:
+        return answer_question(question, chunks, answerer)
+    except AIServiceError as exc:
+        logger.warning("Falha ao gerar a resposta: %s", exc)
+        raise _ai_error(exc) from exc
+
+
+def _source_excerpts(result: AnswerResult) -> list[SourceExcerpt]:
+    return [
+        SourceExcerpt(
+            ref=item.ref,
+            page=item.page,
+            text=item.text,
+            quote=item.quote,
+            score=item.score,
+            document_id=item.document_id,
+            filename=item.filename,
+        )
+        for item in result.citations
+    ]
 
 
 @router.post("/upload", response_model=DocumentUploadResponse, status_code=status.HTTP_201_CREATED)
@@ -143,37 +217,55 @@ def ask_document(
     if document is None:
         raise HTTPException(status_code=404, detail="Documento não encontrado.")
     question = request.question.strip()
-    if not question:
-        raise HTTPException(status_code=422, detail="A pergunta não pode estar vazia.")
-    try:
-        query_embedding = embedder.embed_query(question)
-    except EmbeddingError as exc:
-        logger.warning("Falha ao gerar embedding da pergunta: %s", exc)
-        raise _ai_error(exc) from exc
-    chunks = document_store.search(
-        document.document_id,
-        user_id,
-        query_embedding,
-        limit=settings.max_search_results,
-        min_similarity=settings.min_similarity,
-    )
-    try:
-        result = answer_question(question, chunks, answerer)
-    except AIServiceError as exc:
-        logger.warning("Falha ao gerar a resposta: %s", exc)
-        raise _ai_error(exc) from exc
+    result = _answer_documents(question, [document], user_id, embedder, answerer, document_store)
     return QuestionResponse(
         document_id=str(document.document_id),
         question=question,
         found=result.found,
         answer=result.answer,
-        sources=[
-            SourceExcerpt(
-                ref=item.ref, page=item.page, text=item.text, quote=item.quote, score=item.score
-            )
-            for item in result.citations
-        ],
+        sources=_source_excerpts(result),
     )
+
+
+@router.post("/ask", response_model=MultiDocumentQuestionResponse)
+def ask_documents(
+    request: MultiDocumentQuestionRequest,
+    user_id: str = Depends(get_current_user),
+    embedder: Embedder = Depends(get_embedder),
+    answerer: Answerer = Depends(get_answerer),
+    document_store: DocumentStore = Depends(get_document_store),
+) -> MultiDocumentQuestionResponse:
+    document_ids = list(dict.fromkeys(_parse_id(item) for item in request.document_ids))
+    documents = [document_store.get(item, user_id) for item in document_ids]
+    if any(document is None for document in documents):
+        raise HTTPException(status_code=404, detail="Documento não encontrado.")
+    available_documents = [document for document in documents if document is not None]
+    question = request.question.strip()
+    result = _answer_documents(
+        question, available_documents, user_id, embedder, answerer, document_store
+    )
+    return MultiDocumentQuestionResponse(
+        document_ids=[str(document.document_id) for document in available_documents],
+        question=question,
+        found=result.found,
+        answer=result.answer,
+        sources=_source_excerpts(result),
+    )
+
+
+@router.delete("", status_code=status.HTTP_204_NO_CONTENT)
+def delete_documents(
+    request: DocumentIdsRequest,
+    user_id: str = Depends(get_current_user),
+    document_store: DocumentStore = Depends(get_document_store),
+) -> None:
+    document_ids = list(dict.fromkeys(_parse_id(item) for item in request.document_ids))
+    documents = [document_store.get(item, user_id) for item in document_ids]
+    if any(document is None for document in documents):
+        raise HTTPException(status_code=404, detail="Documento não encontrado.")
+    for document_id in document_ids:
+        if not document_store.delete(document_id, user_id):
+            raise HTTPException(status_code=404, detail="Documento não encontrado.")
 
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -54,6 +54,8 @@ class Citation:
     text: str
     quote: str
     score: float
+    document_id: str | None = None
+    filename: str | None = None
 
 
 @dataclass(frozen=True)
@@ -188,6 +190,8 @@ def parse_model_answer(raw: str, chunks: list[ScoredChunk]) -> AnswerResult:
                 text=chunks[ref - 1].text,
                 quote=quotes[ref],
                 score=chunks[ref - 1].score,
+                document_id=chunks[ref - 1].document_id,
+                filename=chunks[ref - 1].filename,
             )
             for new_ref, ref in enumerate(refs, start=1)
         ],

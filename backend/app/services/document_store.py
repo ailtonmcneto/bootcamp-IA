@@ -24,6 +24,8 @@ class ScoredChunk:
     chunk_index: int
     text: str
     score: float
+    document_id: str | None = None
+    filename: str | None = None
 
 
 @dataclass(frozen=True)

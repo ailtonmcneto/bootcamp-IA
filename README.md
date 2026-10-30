@@ -1,8 +1,8 @@
 # DocuMind
 
-MVP do Bootcamp IA First. O DocuMind é um chatbot que recebe **um PDF por sessão** e responde
-perguntas usando **somente** o conteúdo desse PDF. Cada resposta mostra o trecho e a página que a
-fundamentam. Quando o documento não tem base para responder, a resposta é sempre:
+MVP do Bootcamp IA First. O DocuMind é um chatbot que recebe **vários PDFs por conversa** e responde
+perguntas usando **somente** o conteúdo desses arquivos. Cada resposta mostra o trecho, o arquivo e
+a página que a fundamentam. Quando os documentos não têm base para responder, a resposta é sempre:
 
 > Não encontrei informações sobre isso no documento enviado.
 
@@ -61,6 +61,8 @@ Abra <http://127.0.0.1:8000/> (interface) ou <http://127.0.0.1:8000/docs> (Swagg
 | `POST` | `/documents/upload` | Envia o PDF (multipart, campo `file`); devolve `201` com `document_id` |
 | `GET` | `/documents/{id}` | Metadados do documento |
 | `POST` | `/documents/{id}/ask` | `{"question": "..."}`; devolve `found`, `answer` e `sources` (página, trecho e frase citada) |
+| `POST` | `/documents/ask` | `{"question": "...", "document_ids": ["..."]}`; consulta todos os PDFs da conversa |
+| `DELETE` | `/documents` | `{"document_ids": ["..."]}`; encerra a conversa e remove seus PDFs |
 | `DELETE` | `/documents/{id}` | Remove o documento (`204`) |
 
 Formato das respostas e tabela de erros: [backend/README.md](backend/README.md#3-endpoints).
@@ -92,12 +94,12 @@ real e são pulados se não houver chave no `.env`. A lista dos seis testes esse
 
 ## Limitações do MVP
 
-- Um PDF por sessão; cada pergunta é independente (sem memória da conversa).
+- A conversa aceita vários PDFs; cada pergunta é independente (sem memória das respostas).
 - Sem OCR: PDFs escaneados são recusados. Limites de 10 MiB e 100 páginas.
 - Tabelas e layouts em colunas podem ser extraídos fora de ordem.
 - Sem autenticação: quem tiver o `document_id` acessa o documento. Use só PDFs públicos ou
   fictícios.
-- No modo memória os documentos somem ao reiniciar; no Supabase não expiram sozinhos.
+- No modo memória os documentos somem ao reiniciar; no Supabase permanecem até serem removidos ao iniciar uma nova conversa.
 - Perguntas muito vagas podem não passar do limiar de similaridade e receber a mensagem fixa.
 - A camada gratuita do Gemini limita requisições por minuto (a API devolve `429 RATE_LIMITED`).
 

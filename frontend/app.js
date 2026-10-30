@@ -1,6 +1,6 @@
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const PREVIEW_LENGTH = 400;
-const UPLOAD_TITLE = "Arraste seu PDF até aqui";
+const UPLOAD_TITLE = "Arraste seus PDFs até aqui";
 const RATE_LIMITED_MESSAGE = "Limite de uso da IA atingido. Aguarde um minuto e tente de novo.";
 const CONNECTION_ERROR =
   "Não foi possível conectar à API. Verifique se o servidor está em execução e tente novamente.";
@@ -42,7 +42,7 @@ const forgotPassword = document.querySelector("#forgot-password");
 const themeToggles = document.querySelectorAll("[data-theme-toggle]");
 const themeLabels = document.querySelectorAll("[data-theme-label]");
 
-let activeDocument = null;
+let activeDocuments = [];
 let isUploading = false;
 let isAsking = false;
 let authMode = "login";
@@ -177,7 +177,7 @@ function showAuthenticated(user) {
 
 function showUnauthenticated() {
   accessToken = null;
-  activeDocument = null;
+  activeDocuments = [];
   authPanel.hidden = false;
   authScreen.hidden = false;
   workspace.hidden = true;
@@ -242,27 +242,30 @@ function validateFile(file) {
 }
 
 function updateControls() {
-  const canAsk = Boolean(activeDocument) && !isAsking;
+  const canAsk = activeDocuments.length > 0 && !isAsking;
   questionInput.disabled = !canAsk;
   submitButton.disabled = !canAsk;
   submitButton.classList.toggle("is-loading", isAsking);
   newChatButton.disabled = isAsking;
-  fileInput.disabled = isUploading || Boolean(activeDocument);
+  fileInput.disabled = isUploading || activeDocuments.length > 0;
   uploadArea.classList.toggle("is-busy", isUploading);
   buttonLabel.textContent = isAsking ? "Buscando resposta..." : "Perguntar";
-  questionInput.placeholder = activeDocument
+  questionInput.placeholder = activeDocuments.length > 0
     ? "Ex.: Quais são os principais prazos mencionados?"
-    : "Envie um PDF para começar a perguntar.";
+    : "Envie PDFs para começar a perguntar.";
 }
 
 function formatPages(pages) {
   return pages === 1 ? "1 página" : `${pages} páginas`;
 }
 
-function showActiveDocument(documentInfo) {
-  activeName.textContent = documentInfo.filename;
-  activeName.title = documentInfo.filename;
-  activeMeta.textContent = `${formatPages(documentInfo.pages)} · documento ativo`;
+function showActiveDocuments() {
+  const filenames = activeDocuments.map((item) => item.filename);
+  const pages = activeDocuments.reduce((total, item) => total + item.pages, 0);
+  activeName.textContent =
+    `${activeDocuments.length} PDF${activeDocuments.length === 1 ? "" : "s"} na conversa`;
+  activeName.title = filenames.join(", ");
+  activeMeta.textContent = `${filenames.join(" · ")} · ${formatPages(pages)}`;
   uploadArea.hidden = true;
   activeDocumentPanel.hidden = false;
 }
@@ -275,8 +278,8 @@ function resetUploadArea() {
   activeDocumentPanel.hidden = true;
 }
 
-async function uploadFile(file) {
-  if (!file || activeDocument || isUploading) {
+async function uploadFiles(files) {
+  if (files.length === 0 || activeDocuments.length > 0 || isUploading) {
     return;
   }
 
@@ -284,7 +287,7 @@ async function uploadFile(file) {
   hideStatus();
 
   try {
-    validateFile(file);
+    files.forEach(validateFile);
   } catch (error) {
     resetUploadArea();
     showUploadError(error.message);
@@ -292,34 +295,47 @@ async function uploadFile(file) {
   }
 
   isUploading = true;
-  uploadTitle.textContent = "Analisando seu PDF...";
+  uploadTitle.textContent = `Analisando ${files.length} PDF${files.length === 1 ? "" : "s"}...`;
   uploadArea.classList.add("has-file");
   updateControls();
 
   try {
-    const formData = new FormData();
-    formData.append("file", file);
-    activeDocument = await requestJson(
-      "/documents/upload",
-      { method: "POST", body: formData },
-      "Não foi possível enviar o documento.",
-    );
-    showActiveDocument(activeDocument);
-  } catch (error) {
-    resetUploadArea();
-    showUploadError(describeError(error));
+    const failures = [];
+    for (const file of files) {
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+        const uploaded = await requestJson(
+          "/documents/upload",
+          { method: "POST", body: formData },
+          "Não foi possível enviar o documento.",
+        );
+        activeDocuments.push(uploaded);
+      } catch (error) {
+        failures.push(`${file.name}: ${describeError(error)}`);
+      }
+    }
+
+    if (activeDocuments.length > 0) {
+      showActiveDocuments();
+    } else {
+      resetUploadArea();
+    }
+    if (failures.length > 0) {
+      showUploadError(`Não foi possível enviar:\n${failures.join("\n")}`);
+    }
   } finally {
     isUploading = false;
     updateControls();
   }
 
-  if (activeDocument) {
+  if (activeDocuments.length > 0) {
     questionInput.focus();
   }
 }
 
 fileInput.addEventListener("change", () => {
-  uploadFile(fileInput.files[0]);
+  uploadFiles([...fileInput.files]);
 });
 
 for (const eventName of ["dragenter", "dragover"]) {
@@ -339,7 +355,7 @@ for (const eventName of ["dragleave", "drop"]) {
 }
 
 uploadArea.addEventListener("drop", (event) => {
-  uploadFile(event.dataTransfer.files[0]);
+  uploadFiles([...event.dataTransfer.files]);
 });
 
 function createElement(tagName, className, text) {
@@ -379,7 +395,15 @@ function createSourceCard(source) {
   const card = createElement("article", "source-card");
 
   const header = createElement("p", "source-page");
-  header.append(createElement("span", "source-ref", String(source.ref)), `Página ${source.page}`);
+  header.append(createElement("span", "source-ref", String(source.ref)));
+  if (source.filename) {
+    header.append(
+      createElement("strong", "source-filename", source.filename),
+      ` · Página ${source.page}`,
+    );
+  } else {
+    header.append(`Página ${source.page}`);
+  }
   card.append(header);
 
   const quote = source.quote.trim();
@@ -413,7 +437,12 @@ function createSourceCard(source) {
 }
 
 function renderAnswerText(container, answer, sources) {
-  const pages = new Map(sources.map((source) => [String(source.ref), source.page]));
+  const locations = new Map(
+    sources.map((source) => [
+      String(source.ref),
+      source.filename ? `${source.filename}, página ${source.page}` : `página ${source.page}`,
+    ]),
+  );
   const parts = answer.split(/(\[\d+\])/);
   const lastIndex = new Map();
   parts.forEach((part, index) => {
@@ -436,8 +465,8 @@ function renderAnswerText(container, answer, sources) {
       return;
     }
     const ref = createElement("sup", "citation-ref", match[1]);
-    const page = pages.get(match[1]);
-    ref.title = page === undefined ? `Fonte ${match[1]}` : `Fonte ${match[1]}, página ${page}`;
+    const location = locations.get(match[1]);
+    ref.title = location === undefined ? `Fonte ${match[1]}` : `Fonte ${match[1]}, ${location}`;
     container.append(ref);
   });
 }
@@ -477,7 +506,7 @@ function addChatEntry(question) {
   questionBubble.append(createElement("span", "visually-hidden", "Você perguntou: "), question);
 
   const answerBlock = createElement("div", "chat-answer is-pending");
-  answerBlock.append(createElement("p", "answer-text", "Procurando no documento..."));
+  answerBlock.append(createElement("p", "answer-text", "Procurando nos documentos..."));
 
   entry.append(questionBubble, answerBlock);
   chatHistory.append(entry);
@@ -492,7 +521,7 @@ questionForm.addEventListener("submit", async (event) => {
 
   const question = questionInput.value.trim();
 
-  if (!activeDocument || isAsking) {
+  if (activeDocuments.length === 0 || isAsking) {
     return;
   }
 
@@ -509,13 +538,16 @@ questionForm.addEventListener("submit", async (event) => {
 
   try {
     const result = await requestJson(
-      `/documents/${encodeURIComponent(activeDocument.document_id)}/ask`,
+      "/documents/ask",
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question }),
+        body: JSON.stringify({
+          question,
+          document_ids: activeDocuments.map((item) => item.document_id),
+        }),
       },
-      "Não foi possível consultar o documento.",
+      "Não foi possível consultar os documentos.",
     );
     renderAnswer(answerBlock, result);
   } catch (error) {
@@ -538,7 +570,7 @@ questionInput.addEventListener("keydown", (event) => {
 });
 
 newChatButton.addEventListener("click", async () => {
-  if (!activeDocument || isAsking) {
+  if (activeDocuments.length === 0 || isAsking) {
     return;
   }
 
@@ -547,19 +579,23 @@ newChatButton.addEventListener("click", async () => {
 
   try {
     await requestJson(
-      `/documents/${encodeURIComponent(activeDocument.document_id)}`,
-      { method: "DELETE" },
+      "/documents",
+      {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          document_ids: activeDocuments.map((item) => item.document_id),
+        }),
+      },
       "Não foi possível encerrar a conversa.",
     );
   } catch (error) {
-    if (error.status !== 404) {
-      showStatus(describeError(error), true);
-      newChatButton.disabled = false;
-      return;
-    }
+    showStatus(describeError(error), true);
+    newChatButton.disabled = false;
+    return;
   }
 
-  activeDocument = null;
+  activeDocuments = [];
   chatHistory.replaceChildren();
   chatHistory.hidden = true;
   questionInput.value = "";

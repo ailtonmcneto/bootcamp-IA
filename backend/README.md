@@ -1,8 +1,9 @@
 # DocuMind — backend
 
-O DocuMind é um chatbot que recebe **um PDF por sessão** e responde perguntas usando **somente**
-o conteúdo desse PDF. Cada resposta traz marcadores `[n]` que apontam para o trecho e a página
-que a fundamentam. Quando o documento não tem base para responder, a resposta é sempre:
+O DocuMind é um chatbot que recebe **vários PDFs por conversa** e responde perguntas usando
+**somente** o conteúdo desses arquivos. Cada resposta traz marcadores `[n]` que apontam para o
+trecho, o arquivo e a página que a fundamentam. Quando os documentos não têm base para responder,
+a resposta é sempre:
 
 > Não encontrei informações sobre isso no documento enviado.
 
@@ -101,7 +102,14 @@ A chave `service_role` ignora o RLS: use-a só no backend, nunca no front-end.
 | `POST` | `/documents/upload` | Multipart, campo `file`. Devolve `201` com `document_id`, `filename`, `pages`, `characters`, `status` |
 | `GET` | `/documents/{id}` | Metadados do documento |
 | `POST` | `/documents/{id}/ask` | Body `{"question": "..."}`. Devolve a resposta com fontes |
+| `POST` | `/documents/ask` | Body `{"question": "...", "document_ids": ["..."]}`. Busca em todos os PDFs informados |
+| `DELETE` | `/documents` | Body `{"document_ids": ["..."]}`. Remove os PDFs da conversa (`204`) |
 | `DELETE` | `/documents/{id}` | Remove o documento. Devolve `204` |
+
+Na interface, escolha vários PDFs juntos. O backend recebe cada PDF pelo endpoint de upload
+existente; a interface envia os IDs resultantes em cada pergunta. As fontes incluem `filename` e
+`document_id` além da página e do trecho. Ao iniciar uma nova conversa, a interface remove todos
+os documentos da conversa.
 
 Exemplo:
 
@@ -110,6 +118,15 @@ curl -F "file=@regulamento-ficticio.pdf" http://127.0.0.1:8000/documents/upload
 curl -X POST http://127.0.0.1:8000/documents/<document_id>/ask \
   -H "Content-Type: application/json" \
   -d '{"question": "Até que dia posso fazer a matrícula?"}'
+```
+
+Para consultar mais de um PDF, envie todos os IDs:
+
+```bash
+curl -X POST http://127.0.0.1:8000/documents/ask \
+  -H "Content-Type: application/json" \
+  -d '{"document_ids": ["<document_id_1>", "<document_id_2>"],
+       "question": "Quais são os prazos?"}'
 ```
 
 Resposta:
@@ -122,7 +139,10 @@ Resposta:
 ```
 
 - `sources` traz só os trechos citados. `text` é o trecho completo e `quote` é a frase curta que
-  sustenta a resposta, sempre recortada do texto original do trecho.
+  sustenta a resposta, sempre recortada do texto original do trecho. Cada fonte também identifica
+  o arquivo (`filename` e `document_id`).
+- A consulta de vários PDFs responde com `document_ids` no lugar de `document_id`; cada fonte
+  indica de qual PDF e página veio.
 - Citações cuja frase não aparece no trecho são descartadas; se nenhuma sobrar, a resposta vira
   `found: false`.
 - Quando `found` é `false`, `answer` é a mensagem fixa e `sources` vem vazio.

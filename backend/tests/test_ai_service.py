@@ -66,9 +66,19 @@ def test_answer_with_source(pdf_bytes: bytes, fake_answerer: FakeAnswerer) -> No
     assert body["answer"] == "O prazo é 15 de fevereiro [1]."
     assert len(body["sources"]) == 1
     source = body["sources"][0]
-    assert set(source) == {"ref", "page", "text", "quote", "score"}
+    assert set(source) == {
+        "ref",
+        "page",
+        "text",
+        "quote",
+        "score",
+        "document_id",
+        "filename",
+    }
     assert source["ref"] == 1
     assert source["page"] == 1
+    assert source["document_id"] == document_id
+    assert source["filename"] == "regulamento.pdf"
     assert "15 de fevereiro" in source["text"]
     assert source["quote"] == "prazo para matrícula é 15 de fevereiro"
     assert 0 < source["score"] <= 1
